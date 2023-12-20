@@ -1,0 +1,48 @@
+Bootstrap: docker
+From: python:3.11-slim-bookworm
+
+%files
+    packages.txt /packages.txt
+    requirements.txt /requirements.txt
+
+%post
+    # Update and install dependencies
+    apt-get update && apt-get install -y $(cat /packages.txt) && rm -rf /var/lib/apt/lists/*
+
+    git clone https://github.com/Dibz15/OpenMineChangeDetection.git /OpenMineChangeDetection
+
+    # Upgrade pip and install Python dependencies
+    pip install --upgrade pip && \
+    pip install --no-cache-dir -r /requirements.txt
+
+    # Creates a non-root user
+    # adduser -u 5678 --disabled-password --gecos "" appuser
+
+%environment
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONUNBUFFERED=1
+    export PYTHONPATH=$PYTHONPATH:/OpenMineChangeDetection
+
+%runscript
+    # exec streamlit run streamlit_app.py
+    /bin/bash
+
+%startscript
+    # exec streamlit run streamlit_app.py
+    /bin/bash
+
+%post
+    # Adjust permissions for the non-root user
+    # chown -R appuser /app
+
+    # Set the working directory
+    # WORKDIR /app
+
+    # Optional: Uncomment if you need nltk punkt
+    # python3 -c "import nltk; nltk.download('punkt')"
+
+%labels
+    Author Dibz15
+
+%help
+    This image contains a Python 3.11 environment with Streamlit.

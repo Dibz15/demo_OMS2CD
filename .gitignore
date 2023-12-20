@@ -1,0 +1,5 @@
+*.simg
+.vscode/*
+OpenMineChangeDetection/*
+OMS2CD/*
+outputs/*
