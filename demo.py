@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 import os
 from skimage.exposure import equalize_hist, equalize_adapthist
+from scipy.ndimage import binary_dilation
 from tqdm import tqdm
 import glob
 import itertools
@@ -22,8 +23,6 @@ def normalize_histogram(image):
         image[i, :, :] = equalize_hist(image[i, :, :]) * 255
     return image
 
-from skimage.exposure import equalize_adapthist
-
 def adaptive_histogram_equalization(image):
     """
     Apply adaptive histogram equalization (CLAHE) to an image.
@@ -32,6 +31,70 @@ def adaptive_histogram_equalization(image):
     for i in range(image.shape[0]):
         image[i, :, :] = equalize_adapthist(image[i, :, :], clip_limit=0.05) * 255
     return image.astype(np.uint8)
+
+def create_bordered_mask(mask_array):
+    """
+    Create a bordered mask with white edges and black background.
+
+    Args:
+    mask_array (np.ndarray): The original mask array, values should be 0 or 255.
+
+    Returns:
+    np.ndarray: Bordered mask as a numpy array of the same dimensions and dtype uint8.
+    """
+    # Ensure the input is a boolean mask
+    bool_mask = mask_array == 255
+
+    # Find edges by dilating the mask and then finding the difference
+    dilated_mask = binary_dilation(bool_mask, structure=np.ones((3, 3)))
+    edges = dilated_mask & ~bool_mask
+
+    # Convert edges to uint8 (edges will be True/1, so multiply by 255 to make them white)
+    bordered_mask = edges.astype(np.uint8) * 255
+
+    return bordered_mask
+
+def create_bordered_mask_chw(mask_array):
+    """
+    Create a bordered mask for a mask with channels-first format (e.g., [c, h, w])
+    with white edges and black background. It handles RGB or RGBA masks.
+
+    Args:
+    mask_array (np.ndarray): The original mask array in [c, h, w] format.
+
+    Returns:
+    np.ndarray: Bordered mask as a numpy array of the same dimensions and dtype uint8.
+    """
+    # Initialize an empty mask for RGB channels
+    bordered_mask_rgb = np.zeros_like(mask_array[:3, :, :], dtype=np.uint8)
+
+    # Process each RGB channel independently
+    for i in range(3):  # Assuming mask_array has at least 3 channels (RGB)
+        channel_idx = 1 - i
+        # Create a boolean mask for the current channel
+        bool_mask = mask_array[channel_idx, :, :] > 0
+
+        # Find edges by dilating the mask and then finding the difference
+        dilated_mask = binary_dilation(bool_mask, structure=np.ones((5, 5)), iterations=1)
+        edges = dilated_mask & ~bool_mask
+
+        # Set the edges in the bordered mask to white (255) for this channel
+        bordered_mask_rgb[i, edges] = 255
+
+    # Reshape the bordered mask to [h, w, c] if you want to preserve the standard image format
+    bordered_mask_reshaped = np.transpose(bordered_mask_rgb, (1, 2, 0))
+
+    # If the original mask includes an alpha channel and you want to preserve it
+    if mask_array.shape[0] == 4:
+        # Add the original alpha channel to the reshaped mask
+        bordered_mask_with_alpha = np.dstack((bordered_mask_reshaped, mask_array[3, :, :]))
+    else:
+        bordered_mask_with_alpha = bordered_mask_reshaped
+    
+    bordered_mask_final = np.transpose(bordered_mask_with_alpha, (2, 0, 1))
+
+    return bordered_mask_final
+
 
 def apply_mask_to_image(image, mask, mask_alpha_channel):
     # Convert RGB image to RGBA by adding an opaque alpha channel
@@ -178,12 +241,46 @@ def create_gif(image_path1, image_path2, mask_path, area_mask_path, gt_mask_path
             alpha_channel = np.full(mask.shape[1:], int(255 * alpha), dtype=np.uint8)
             mask_overlay = np.concatenate((mask_rgb, alpha_channel[np.newaxis, :, :]), axis=0)
 
-        # This part is used to remove the black background from the mask :)
-        nz = mask_overlay == 0
-        mask_overlay[nz][3] = 0
-        alpha_channel[nz[3]] = 0
-
         frames = []
+        for _ in range(loops):
+            # Convert to PIL Image and add to frames
+            frame1 = Image.fromarray(image1.transpose((1, 2, 0)))
+            frames.append(frame1)
+
+            frame2 = Image.fromarray(image2.transpose((1, 2, 0)))
+            frames.append(frame2)
+
+        # This part is used to remove the black background from the mask :)
+        nz = mask_overlay[3] < 10
+        mask_overlay[3][nz] = 0
+        alpha_channel[nz] = 0
+
+        for _ in range(loops):  # Number of loops
+            # Apply mask to images
+            image1_rgba = apply_mask_to_image(image1, mask_overlay, alpha_channel)
+            image2_rgba = apply_mask_to_image(image2, mask_overlay, alpha_channel)
+
+            # Convert to PIL Image and add to frames
+            frame1 = Image.fromarray(image1_rgba.transpose((1, 2, 0)))
+            frames.append(frame1)
+
+            frame2 = Image.fromarray(image2_rgba.transpose((1, 2, 0)))
+            frames.append(frame2)
+
+        
+        # With bordered mask (not colored)
+        color = np.array([1, 1, 0], dtype=np.uint8)  # Yellow color
+
+        # Apply the color to the mask
+        mask_rgb = np.stack([mask[0, :, :] * color[i] for i in range(3)], axis=0)
+        alpha_channel = np.full(mask.shape[1:], int(255 * alpha), dtype=np.uint8)
+        mask_overlay = np.concatenate((mask_rgb, alpha_channel[np.newaxis, :, :]), axis=0)
+        mask_overlay = create_bordered_mask_chw(mask_overlay)
+
+        nz = mask_overlay[0] < 10
+        mask_overlay[3][nz] = 0
+        alpha_channel[nz] = 0
+
         for _ in range(loops):  # Number of loops
             # Apply mask to images
             image1_rgba = apply_mask_to_image(image1, mask_overlay, alpha_channel)
@@ -206,21 +303,8 @@ def create_gif(image_path1, image_path2, mask_path, area_mask_path, gt_mask_path
     # except Exception as e:
     #     logging.error(f"An error occurred: {e}")
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
-    OMS2CD_PATH = Path('/data/OMS2CD/')
-    SITE_DATA = Path('/work/OpenMineChangeDetection/site_data/')
-    OUTPUTS = Path('/outputs/')
-
-    download_prep_oms2cd(output_dir=str(OMS2CD_PATH))
-    
-    # split = 'val' # 'test'
-    # validated_or_not = 'validated' # 'not_validated'
-    # threshold = '0.4' # '0.6'
-    # model = 'lsnet' # 'ddpmcd', 'tinycd'
-
-    # Define the options for each variable
+def process_gifs(OMS2CD_PATH, SITE_DATA, OUTPUTS):
+     # Define the options for each variable
     splits = ['val', 'test']
     validated_options = ['validated', 'not_validated']
     thresholds = ['0.4', '0.6']
@@ -230,9 +314,6 @@ if __name__ == "__main__":
     for split, validated_or_not, threshold, model in tqdm(itertools.product(splits, validated_options, thresholds, models)):
         this_out_dir = OUTPUTS / os.path.join(validated_or_not, threshold, model)
 
-        logging.info(f'Creating directory path {this_out_dir}.')
-        os.makedirs(this_out_dir, mode=0o777, exist_ok=True)
-
         valid_ext = '_validated' if validated_or_not == 'validated' else ''
 
         if validated_or_not == 'validated':
@@ -240,6 +321,9 @@ if __name__ == "__main__":
         else:
             # TODO pull case study data from GDrive
             continue
+        
+        logging.info(f'Creating directory path {this_out_dir}.')
+        os.makedirs(this_out_dir, mode=0o777, exist_ok=True)
 
         facilities = dataset.get_facilities()
         for facility in sorted(facilities):
@@ -293,7 +377,23 @@ if __name__ == "__main__":
                         this_out_dir / out_img, \
                         alpha=0.5, \
                         equalize=True, \
-                        loops=3)
+                        loops=2)
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+
+    OMS2CD_PATH = Path('/data/OMS2CD/')
+    SITE_DATA = Path('/work/OpenMineChangeDetection/site_data/')
+    OUTPUTS = Path('/outputs/')
+
+    download_prep_oms2cd(output_dir=str(OMS2CD_PATH))
+    
+    # split = 'val' # 'test'
+    # validated_or_not = 'validated' # 'not_validated'
+    # threshold = '0.4' # '0.6'
+    # model = 'lsnet' # 'ddpmcd', 'tinycd'
+
+    process_gifs(OMS2CD_PATH, SITE_DATA, OUTPUTS)
 
     # src_img1 = 's2_Werris Creek_150.633355555961_-31.3853783732025_2019-03-01.tif'
     # src_img2 = 's2_Werris Creek_150.633355555961_-31.3853783732025_2019-04-01.tif'
@@ -305,13 +405,19 @@ if __name__ == "__main__":
     # area_mask = 'Werris Creek.tif'
     # gt_mask = 'Werris Creek_0218.tif'
 
+    # valid_ext = 'validated'
+    # threshold = '0.4'
+    # model = 'lsnet'
+
+    # this_out_dir = OUTPUTS
+
     # # Usage
     # create_gif(OMS2CD_PATH / src_img1, \
     #         OMS2CD_PATH / src_img2, \
-    #         SITE_DATA / os.path.join(f'modelchanges{valid_ext}', threshold, f'masks_{model}', str(pred_img)), \
+    #         SITE_DATA / os.path.join(f'modelchanges_{valid_ext}', threshold, f'masks_{model}', str(pred_img)), \
     #         OMS2CD_PATH / os.path.join('area_mask', area_mask), \
     #         OMS2CD_PATH / os.path.join('mask', gt_mask), \
     #         this_out_dir / out_img, \
     #         alpha=0.5, \
     #         equalize=True, \
-    #         loops=3)
+    #         loops=2)
