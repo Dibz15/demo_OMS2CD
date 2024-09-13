@@ -1,6 +1,6 @@
+cython
 streamlit
-numpy
-rasterio==1.3.8
+numpy==1.24.4
 torchgeo==0.4.1
 tiler==0.5.7
 kornia==0.6.12
