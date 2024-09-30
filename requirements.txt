@@ -1,11 +1,12 @@
 cython
 streamlit
-numpy==1.24.4
-torchgeo==0.4.1
+numpy==1.26.1
+torchgeo==0.5.1
 tiler==0.5.7
 kornia==0.6.12
-lightning==1.9.5
-torchmetrics==0.11.4
-scikit-image
+lightning==2.1.0
+setuptools
+scikit-image==0.23.0
 notebook
 seaborn
+stocaching

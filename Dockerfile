@@ -1,4 +1,4 @@
-FROM python:3.9-slim-bookworm
+FROM python:3.11-slim-bookworm
 
 RUN mkdir /work
 
